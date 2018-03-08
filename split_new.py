@@ -68,8 +68,10 @@ class AutoSplit:
             nbins += 1
 
         temp_cont = temp_cont.rename(columns={'var': 'oldbin'})
-        temp_map = temp_cont.drop([0, self.target, 'pdv1', 'i'], axis=1)
+        # temp_map = temp_cont.drop([0, self.target, 'pdv1', 'i'], axis=1)
+        temp_map = temp_cont.drop(['pdv1', 'i'], axis=1)
         temp_map = temp_map.sort_values(by=['bin', 'oldbin'])
+        temp_map['name'] = x.name
         # get new lower, upper, bin, total for sub
         data = pd.DataFrame()
         s = set()
@@ -84,10 +86,8 @@ class AutoSplit:
 
         # resort data
         data = data.sort_values(by='lower')
-        data['newbin'] = range(1, self.max + 1)
-        data = data.drop('bin', axis=1)
-        data.index = data['newbin']
-        data = data.rename(columns={'newbin': 'bin'})
+        data['bin'] = range(1, self.max + 1)
+        data = data.reset_index(drop=True)
         return data
 
     def bin_for_category(self, x, y):
@@ -110,16 +110,25 @@ class AutoSplit:
         # 如果离散变量本身的组数少于最大分组数量
         if m <= self.max:
             temp_cont = temp_cont.sort_index()
-            temp_cont['bin'] = np.arange(1,m+1)
+            temp_cont['bin'] = np.arange(1, m + 1)
         else:
             while (nbins < self.max):
                 temp_cont = self._cand_split(temp_cont)
                 nbins += 1
 
-        temp_cont = temp_cont.rename(columns={'var': x.name})
-        temp_cont = temp_cont.drop([0, 1, 'i', 'pdv1'], axis=1)
-        temp_cont = temp_cont.sort_values(by='bin')
-        return temp_cont
+        temp_cont['var_name'] = x.name
+        temp_cont = temp_cont.drop(['i', 'pdv1'], axis=1)
+        temp_cont = temp_cont.sort_index()
+
+        temp_map = temp_cont.groupby('bin', as_index=False)[[0, 1, 'total']].sum()
+        temp_map = temp_map.rename(columns={0: 'good', 1: 'bad'})
+        temp_map['var_name'] = x.name
+        temp_map['good_rate'] = temp_map['good'] * 1.0 / temp_map['total']
+        temp_map['bad_rate'] = temp_map['bad'] * 1.0 / temp_map['total']
+        temp_map = temp_map[['var_name', 'bin','good', 'bad', 'total',
+                             'good_rate', 'bad_rate']]
+
+        return temp_cont,temp_map
 
     def _check_target_binary(self, y):
         """
@@ -207,12 +216,15 @@ class AutoSplit:
         # sorted data by bin&pdv1
         bin_ds = bin_ds.sort_values(by=['bin', 'pdv1'])
         # get the maximum of bin
-        Bmax = max(bin_ds['bin'])
+        bin_max = max(bin_ds['bin'])
+        # todo:修改次数逻辑
+        if bin_max <= self.max:
+            pass
         # screen data and cal nrows by diffrence bin
         # and save the results in dict
         temp_binC = dict()
         m = dict()
-        for i in range(1, Bmax + 1):
+        for i in range(1, bin_max + 1):
             temp_binC[i] = bin_ds[bin_ds['bin'] == i]
             m[i] = len(temp_binC[i])
         """
@@ -222,12 +234,12 @@ class AutoSplit:
         temp_trysplit = dict()
         temp_main = dict()
         bin_i_value = []
-        for i in range(1, Bmax + 1):
+        for i in range(1, bin_max + 1):
             if m[i] > 1:  # if nrows of bin > 1
                 # split data by best i
                 temp_trysplit[i] = self._best_split(temp_binC[i], i)
                 temp_trysplit[i]['bin'] = np.where(temp_trysplit[i]['split'] == 1,
-                                                   Bmax + 1,
+                                                   bin_max + 1,
                                                    temp_trysplit[i]['bin'])
                 # delete bin == i
                 temp_main[i] = bin_ds[bin_ds['bin'] != i]
@@ -501,15 +513,26 @@ class AutoSplit:
         df: pandas dataframe, one row
         """
         l = len(sub)
+        var_name = sub.name.iat[0]
         total = sub['total'].sum()
+        sum_0 = sub[0].sum()
+        sum_1 = sub[1].sum()
+        good_rate = sum_0 * 1.0 / total
+        bad_rate = sum_1 * 1.0 / total
+        woe = np.math.log(1.0 * good_rate / bad_rate)
+        iv = (good_rate - bad_rate) * woe
         first = sub.iloc[0, :]
         last = sub.iloc[l - 1, :]
-
         lower = first['lower']
         upper = last['upper']
         df = pd.DataFrame()
-        df = df.append([i, lower, upper, total], ignore_index=True).T
-        df.columns = ['bin', 'lower', 'upper', 'total']
+        df = df.append([var_name, i, lower, upper,
+                        sum_0, sum_1, total,
+                        good_rate, bad_rate, woe, iv],
+                       ignore_index=True).T
+        df.columns = ['var_name', 'bin', 'lower', 'upper',
+                      'good', 'bad', 'total',
+                      'good_rate', 'bad_rate', 'woe', 'iv']
         return df
 
     def _group_cal(self, x, y):
@@ -594,17 +617,18 @@ if __name__ == '__main__':
     X.columns = [i.replace('(cm)', '').replace(' ', '_') for i in iris.feature_names]
     X = X["sepal_width_"]
 
-    split = AutoSplit(method=4, max=5)
+    split = AutoSplit(method=3, max=3)
 
     # 连续变量分组示例
-    bin_map = split.bin_for_continues(X, pd.Series(y))
-    print(bin_map)
-    df = split.apply_bin_for_continues(X, bin_map)
-    print(df.head())
-
-    # 离散变量分组示例-需要加入判断逻辑
-    X = pd.cut(X, 2)
+    # bin_map = split.bin_for_continues(X, pd.Series(y))
+    # print(bin_map)
+    # df = split.apply_bin_for_continues(X, bin_map)
+    # # print(df.head())
+    #
+    # # 离散变量分组示例-需要加入判断逻辑
+    X = pd.cut(X, 10)
     bin_map2 = split.bin_for_category(X, pd.Series(y))
-    print(bin_map2.sort_index())
-    df2 = split.apply_bin_for_category(X, bin_map2)
+    print(bin_map2[0].sort_index())
+    print(bin_map2[1])
+    df2 = split.apply_bin_for_category(X, bin_map2[0])
     print(df2.head())
