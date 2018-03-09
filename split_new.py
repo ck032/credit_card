@@ -9,12 +9,14 @@
 import pandas as pd
 import numpy as np
 from sklearn.utils.multiclass import type_of_target
+from sklearn.base import TransformerMixin
+from collections import namedtuple
 
 desired_width = 320
 pd.set_option('display.width', desired_width)
 
 
-class AutoSplit:
+class AutoSplit(TransformerMixin):
     """自动化分组:给定df，给出除了目标变量以外的全部离散化分组"""
 
     def __init__(self, method=1, max=5):
@@ -23,6 +25,33 @@ class AutoSplit:
         self.acc = 0.01  # 初始分组精度
         self.target = 1  # 目标标志
         self.adjust = 0.000001  # 默认的调整系数
+        self.con_bin_result = None
+        self.cat_bin_result = None
+        self.cat_bin_summary = None
+
+    def fit(self, x, y):
+
+        # 连续变量离散化结果
+        con_result = pd.DataFrame()
+        # 离散变量离散化结果
+        cat_result = pd.DataFrame()
+        cat_bin_summary = pd.DataFrame()
+        for var in x:
+            if x.var.dtype != 'object':
+                var_result = self.bin_for_continues(var, y)
+                con_result = pd.concat(con_result, var_result)
+            else:
+                var_bin_map = self.bin_for_category(var, y).bin_map
+                var_bin_summary = self.bin_for_category(var, y).bin_summary
+                cat_result = pd.concat(cat_result, var_bin_map)
+                cat_bin_summary = pd.concat(cat_bin_summary, var_bin_summary)
+
+        self.con_bin_result = con_result
+        self.cat_bin_result = cat_result
+        self.cat_bin_summary = cat_bin_summary
+
+    def transform(self, x, y=None, **fit_params):
+        pass
 
     def bin_for_continues(self, x, y):
         """
@@ -105,6 +134,8 @@ class AutoSplit:
         temp_cont: pandas dataframe, reduct category map
         """
         self._check_target_binary(y)
+
+        result = namedtuple('result', ['bin_map', 'bin_summary'])
         temp_cont, m = self._group_cal(x, y)
         nbins = 1
         # 如果离散变量本身的组数少于最大分组数量
@@ -125,10 +156,10 @@ class AutoSplit:
         temp_map['var_name'] = x.name
         temp_map['good_rate'] = temp_map['good'] * 1.0 / temp_map['total']
         temp_map['bad_rate'] = temp_map['bad'] * 1.0 / temp_map['total']
-        temp_map = temp_map[['var_name', 'bin','good', 'bad', 'total',
+        temp_map = temp_map[['var_name', 'bin', 'good', 'bad', 'total',
                              'good_rate', 'bad_rate']]
 
-        return temp_cont,temp_map
+        return result(temp_cont, temp_map)
 
     def _check_target_binary(self, y):
         """
