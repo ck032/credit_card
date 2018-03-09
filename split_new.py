@@ -9,14 +9,14 @@
 import pandas as pd
 import numpy as np
 from sklearn.utils.multiclass import type_of_target
-from sklearn.base import TransformerMixin
+from sklearn.base import BaseEstimator, TransformerMixin
 from collections import namedtuple
 
 desired_width = 320
 pd.set_option('display.width', desired_width)
 
 
-class AutoSplit(TransformerMixin):
+class AutoSplit(BaseEstimator, TransformerMixin):
     """自动化分组:给定df，给出除了目标变量以外的全部离散化分组"""
 
     def __init__(self, method=1, max=5):
@@ -25,9 +25,9 @@ class AutoSplit(TransformerMixin):
         self.acc = 0.01  # 初始分组精度
         self.target = 1  # 目标标志
         self.adjust = 0.000001  # 默认的调整系数
-        self.con_bin_result = None
-        self.cat_bin_result = None
-        self.cat_bin_summary = None
+        self.con_bin_result = None  # 连续变量的分段结果，可以用来匹配
+        self.cat_bin_result = None  # 离散变量的分段结果，可以用来匹配
+        self.cat_bin_summary = None  # 离散变量的分段结果汇总表
 
     def fit(self, x, y):
 
@@ -36,22 +36,38 @@ class AutoSplit(TransformerMixin):
         # 离散变量离散化结果
         cat_result = pd.DataFrame()
         cat_bin_summary = pd.DataFrame()
-        for var in x:
-            if x.var.dtype != 'object':
+        for col in x.columns:
+            var = x[col]
+            var_name = var.name
+            if var.dtype.name not in ['object','category']:
                 var_result = self.bin_for_continues(var, y)
-                con_result = pd.concat(con_result, var_result)
+                x[var_name + "_BIN"] = self.apply_bin_for_continues(var, var_result)
+                con_result = pd.concat([con_result, var_result])
             else:
-                var_bin_map = self.bin_for_category(var, y).bin_map
+                var_result = self.bin_for_category(var, y).bin_map
                 var_bin_summary = self.bin_for_category(var, y).bin_summary
-                cat_result = pd.concat(cat_result, var_bin_map)
-                cat_bin_summary = pd.concat(cat_bin_summary, var_bin_summary)
+                x[var_name + "_BIN"] = self.apply_bin_for_category(var, var_result)
+                cat_result = pd.concat([cat_result, var_result])
+                cat_bin_summary = pd.concat([cat_bin_summary, var_bin_summary])
 
         self.con_bin_result = con_result
         self.cat_bin_result = cat_result
         self.cat_bin_summary = cat_bin_summary
 
+        return x
+
     def transform(self, x, y=None, **fit_params):
-        pass
+        for col in x.columns:
+            var = x[col]
+            var_name = var.name
+            if var.dtype.name not in ['object', 'category']:
+                col_con_result = self.con_bin_result[self.con_bin_result.var_name == var_name]
+                x[var_name + "_BIN"] = self.apply_bin_for_continues(var, col_con_result)
+            else:
+                col_cat_result = self.cat_bin_result[self.cat_bin_result.var_name == var_name]
+                x[var_name + "_BIN"] = self.apply_bin_for_category(var, col_cat_result)
+
+        return x
 
     def bin_for_continues(self, x, y):
         """
@@ -69,7 +85,7 @@ class AutoSplit(TransformerMixin):
         bin_res = self.apply_bin_for_continues(x, bin_map)
 
         # 合并x,y,以及对应的分组
-        temp_df = pd.concat([x, y, bin_res], axis=1)
+        temp_df = pd.concat([x, pd.DataFrame(y), bin_res], axis=1)
 
         # 每组内的0类，1类的数量，总数量
         t1 = pd.crosstab(index=temp_df[bin_res.name], columns=y)
@@ -645,8 +661,10 @@ if __name__ == '__main__':
     iris = load_iris()
     y = np.where(iris.target > 1, 1, 0)
     X = pd.DataFrame(iris.data)
-    X.columns = [i.replace('(cm)', '').replace(' ', '_') for i in iris.feature_names]
-    X = X["sepal_width_"]
+    X.columns = [i.replace('(cm)', '').rstrip().replace(' ', '_') for i in iris.feature_names]
+    X['sepal_length'] = pd.cut(X['sepal_length'],10)
+
+    X2 = X.copy()
 
     split = AutoSplit(method=3, max=3)
 
@@ -654,12 +672,19 @@ if __name__ == '__main__':
     # bin_map = split.bin_for_continues(X, pd.Series(y))
     # print(bin_map)
     # df = split.apply_bin_for_continues(X, bin_map)
-    # # print(df.head())
+    # # print(df.head())split
     #
     # # 离散变量分组示例-需要加入判断逻辑
-    X = pd.cut(X, 10)
-    bin_map2 = split.bin_for_category(X, pd.Series(y))
-    print(bin_map2[0].sort_index())
-    print(bin_map2[1])
-    df2 = split.apply_bin_for_category(X, bin_map2[0])
-    print(df2.head())
+    # X = pd.cut(X, 10)
+    # bin_map2 = split.bin_for_category(X, pd.Series(y))
+    # print(bin_map2[0].sort_index())
+    # print(bin_map2[1])
+    # df2 = split.apply_bin_for_category(X, bin_map2[0])
+    # print(df2.head())
+
+    # print(X.head())
+    # print(X.sepal_width_.dtype)
+    a = split.fit(X, y)
+    print(a.head())
+    b = split.transform(X2)
+    print(b.head(20))
